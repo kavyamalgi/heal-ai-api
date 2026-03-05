@@ -2,15 +2,15 @@ import os
 import zipfile
 import logging
 from pathlib import Path
+
 from pypdf import PdfReader
+from dotenv import load_dotenv
 
 # LangChain + FAISS imports
 from langchain_community.vectorstores import FAISS
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain.schema import Document
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
-
-from dotenv import load_dotenv
 
 # --- Configuration ---
 load_dotenv()
@@ -19,7 +19,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 ZIP_FILE_NAME = "Gold_Standard.zip"
 EXTRACT_TO_DIRECTORY = "gold_standard_docs"
 VECTOR_DB_PATH = "faiss_diseases_db"
-EMBEDDING_MODEL_NAME = "models/embedding-001"
+EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+
 
 def unzip_local_file(zip_filename, extract_dir):
     """Unzips a local file if the destination directory doesn't exist."""
@@ -33,58 +34,88 @@ def unzip_local_file(zip_filename, extract_dir):
 
     logging.info(f"Unzipping '{zip_filename}' to '{extract_dir}'...")
     os.makedirs(extract_dir, exist_ok=True)
-    with zipfile.ZipFile(zip_filename, 'r') as zip_ref:
+
+    with zipfile.ZipFile(zip_filename, "r") as zip_ref:
         zip_ref.extractall(extract_dir)
 
     logging.info("Unzip complete.")
     return True
 
+
+def extract_text_from_pdf(pdf_path):
+    """Extracts text from a single PDF file."""
+    try:
+        reader = PdfReader(pdf_path)
+        text = ""
+
+        for page in reader.pages:
+            page_text = page.extract_text()
+            if page_text:
+                text += page_text + "\n"
+
+        return text.strip()
+
+    except Exception as e:
+        logging.warning(f"Could not read PDF '{pdf_path}': {e}")
+        return ""
+
+
+def load_documents_from_directory(directory):
+    """Loads and converts all PDFs in a directory into LangChain Document objects."""
+    documents = []
+
+    pdf_files = list(Path(directory).rglob("*.pdf"))
+    logging.info(f"Found {len(pdf_files)} PDF files in '{directory}'.")
+
+    for pdf_path in pdf_files:
+        text = extract_text_from_pdf(pdf_path)
+
+        if text:
+            documents.append(
+                Document(
+                    page_content=text,
+                    metadata={
+                        "source": str(pdf_path),
+                        "title": pdf_path.stem
+                    }
+                )
+            )
+
+    logging.info(f"Successfully loaded {len(documents)} documents.")
+    return documents
+
+
 def main():
     """Main function to build the vector database from a local zip file."""
-    google_api_key = os.getenv("GOOGLE_API_KEY")
-    if not google_api_key:
-        raise ValueError("GOOGLE_API_KEY not found. Please ensure it's in your .env file.")
-
     if not unzip_local_file(ZIP_FILE_NAME, EXTRACT_TO_DIRECTORY):
         return
 
     # 1. Load documents from the extracted directory
-    logging.info(f"Loading documents from '{EXTRACT_TO_DIRECTORY}'...")
-    docs = []
-    # Assumes the zip file contains a directory with text files
-    source_dir = Path(EXTRACT_TO_DIRECTORY)
-    for file_path in source_dir.rglob("*.pdf"): # Adjust "*.txt" if you have other file types
-        try:
+    documents = load_documents_from_directory(EXTRACT_TO_DIRECTORY)
 
-            reader = PdfReader(file_path)
-            text = ""
-            for page in reader.pages:
-                text += page.extract_text() or ""
-
-            if text:
-                docs.append(Document(page_content=text, metadata={"source": str(file_path)}))
-        except Exception as e:
-            logging.warning(f"Could not read file {file_path}: {e}")
-
-    if not docs:
-        logging.error("No documents were loaded. Aborting database build.")
+    if not documents:
+        logging.error("No documents were loaded. Aborting.")
         return
 
-    # 2. Initialize embedding model
+    # 2. Split documents into chunks
+    logging.info("Splitting documents into chunks...")
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000,
+        chunk_overlap=200
+    )
+    chunks = text_splitter.split_documents(documents)
+    logging.info(f"Created {len(chunks)} text chunks.")
+
+    # 3. Initialize local embedding model
     logging.info("Initializing embedding model...")
-    embeddings = GoogleGenerativeAIEmbeddings(model=EMBEDDING_MODEL_NAME, google_api_key=google_api_key)
+    embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_NAME)
 
-    # 3. Split documents into chunks
-    logging.info(f"Splitting {len(docs)} documents into chunks...")
-    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
-    chunks = splitter.split_documents(docs)
+    # 4. Create and save the FAISS vector database
+    logging.info("Building FAISS vector database...")
+    vector_db = FAISS.from_documents(chunks, embeddings)
 
-    # 4. Create and save FAISS vector database
-    logging.info(f"Creating FAISS database from {len(chunks)} chunks...")
-    db = FAISS.from_documents(chunks, embeddings)
-    db.save_local(VECTOR_DB_PATH)
-
-    logging.info(f"Successfully built and saved vector database to '{VECTOR_DB_PATH}'.")
+    vector_db.save_local(VECTOR_DB_PATH)
+    logging.info(f"Vector database built and saved successfully at '{VECTOR_DB_PATH}'.")
 
 
 if __name__ == "__main__":
