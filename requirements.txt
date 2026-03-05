@@ -5,8 +5,8 @@ python-dotenv
 
 # AI and RAG
 langchain
-langchain-google-genai
-google-generativeai
+langchain-anthropic
+anthropic
 faiss-cpu
 sentence-transformers
 requests
