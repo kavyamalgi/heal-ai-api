@@ -2,46 +2,56 @@ import os
 import logging
 from typing import List, Dict, Any, Optional
 
-# LangChain + FAISS imports
 from langchain_community.vectorstores import FAISS
-from langchain_google_genai import GoogleGenerativeAIEmbeddings, GoogleGenerativeAI
+from langchain_anthropic import ChatAnthropic
 from langchain.chains import RetrievalQA
-from langchain.schema import Document
+from langchain_community.embeddings import HuggingFaceEmbeddings
 
 # --- Constants ---
 VECTOR_DB_PATH = "faiss_diseases_db"
-EMBEDDING_MODEL_NAME = "models/embedding-001"
-LLM_MODEL_NAME = "gemini-1.5-flash-latest"
 
-# Configure basic logging
+# Local embedding model (no API key)
+EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+
+# Claude model
+LLM_MODEL_NAME = "claude-3-5-sonnet-20241022"
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
 class RAGService:
-    """
-    Encapsulates the core Retrieval-Augmented Generation logic.
-    """
+    """Encapsulates the core Retrieval-Augmented Generation logic."""
+
     def __init__(self):
-        self.api_key = os.getenv("GOOGLE_API_KEY")
+        self.api_key = os.getenv("ANTHROPIC_API_KEY")
         if not self.api_key:
-            raise ValueError("GOOGLE_API_KEY not found. Please ensure it's in your .env file.")
+            raise ValueError("ANTHROPIC_API_KEY not found. Please ensure it's in your .env file.")
 
         logging.info("Initializing RAG Service...")
+
         self.embeddings = self._initialize_embeddings()
         self.vector_db = self._load_vector_db()
         self.llm = self._initialize_llm()
         self.rag_chain = self._create_rag_chain()
+
         logging.info("RAG Service Initialized Successfully.")
 
-    def _initialize_embeddings(self) -> GoogleGenerativeAIEmbeddings:
-        return GoogleGenerativeAIEmbeddings(model=EMBEDDING_MODEL_NAME, google_api_key=self.api_key)
+    def _initialize_embeddings(self) -> HuggingFaceEmbeddings:
+        return HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_NAME)
 
-    def _initialize_llm(self) -> GoogleGenerativeAI:
-        return GoogleGenerativeAI(model=LLM_MODEL_NAME, google_api_key=self.api_key, temperature=0.2)
+    def _initialize_llm(self) -> ChatAnthropic:
+        # ChatAnthropic will read ANTHROPIC_API_KEY from env, but we pass explicitly for clarity
+        return ChatAnthropic(
+            model=LLM_MODEL_NAME,
+            temperature=0.2,
+            anthropic_api_key=self.api_key,
+        )
 
     def _load_vector_db(self) -> FAISS:
         if not os.path.exists(VECTOR_DB_PATH):
-            raise FileNotFoundError(f"Vector DB not found at '{VECTOR_DB_PATH}'. Make sure this file is in your project directory.")
+            raise FileNotFoundError(
+                f"Vector DB not found at '{VECTOR_DB_PATH}'. Run build_db.py first."
+            )
 
         logging.info(f"Loading vector DB from {VECTOR_DB_PATH}...")
         return FAISS.load_local(
@@ -51,7 +61,7 @@ class RAGService:
         )
 
     def _create_rag_chain(self) -> Optional[RetrievalQA]:
-        retriever = self.vector_db.as_retriever(search_kwargs={'k': 5})
+        retriever = self.vector_db.as_retriever(search_kwargs={"k": 5})
         return RetrievalQA.from_chain_type(
             llm=self.llm,
             chain_type="stuff",
@@ -60,9 +70,6 @@ class RAGService:
         )
 
     def process_query(self, patient_history: str, conversation_history: List[str], query: str) -> Dict[str, Any]:
-        """
-        Processes a query using the full RAG pipeline.
-        """
         if not self.rag_chain:
             return {"error": "RAG chain not initialized."}
 
@@ -91,6 +98,7 @@ class RAGService:
                 "answer": raw_outputs.get("result", ""),
                 "sources": sources
             }
+
         except Exception as e:
             logging.error(f"RAG chain invocation failed: {e}")
             return {"error": f"Failed to process query: {e}"}
