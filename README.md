@@ -13,7 +13,7 @@ These instructions will get you a copy of the project up and running on your loc
 ### Prerequisites
 
 * Python 3.10+
-* An active Google AI Studio API Key
+* An active ANTHROPIC API Key
 
 ### Installation
 
@@ -37,7 +37,7 @@ These instructions will get you a copy of the project up and running on your loc
 4.  **Set Up Your Environment File:**
     Create a `.env` file in the project root and add your Google API key.
     ```bash
-    echo 'GOOGLE_API_KEY="your-google-api-key-goes-here"' > .env
+    echo 'ANTHROPIC_API_KEY="your-anthropic-api-key-goes-here"' > .env
     ```
 
 5.  **Add Your Data:**
